@@ -40,13 +40,44 @@ export class DocxHandler {
     return this.paragraphNodes.length;
   }
 
+  // Safe method to get text ONLY from text runs, ignoring field codes (instrText)
+  private getSafeText(pNode: Element): string {
+    // We only want <w:t> elements. <w:instrText> contains field codes (like TOC, PAGEREF) 
+    // which we must NOT translate or display.
+    const textNodes = pNode.getElementsByTagName("w:t");
+    let text = "";
+    for (let i = 0; i < textNodes.length; i++) {
+        text += textNodes[i].textContent;
+    }
+    return text;
+  }
+
+  // Detect if paragraph is a TOC or Field-heavy line that should be skipped
+  private shouldSkip(pNode: Element): boolean {
+    // Check the FULL content (including hidden codes) to detect Field instructions
+    const fullContent = pNode.textContent || "";
+    
+    // If it contains "TOC \" or "PAGEREF", it is a Table of Contents or Reference line.
+    // Converting these to text breaks the dynamic link in Word.
+    // It's better to leave them as-is; the user can update the TOC in Word manually.
+    if (fullContent.includes("TOC \\") || fullContent.includes("PAGEREF")) {
+        return true;
+    }
+    return false;
+  }
+
   // Extract text content from paragraphs to display/process
   getExtractableParagraphs(): { id: number; text: string }[] {
     return this.paragraphNodes
-      .map((node, index) => ({
-        id: index,
-        text: node.textContent || ""
-      }))
+      .map((node, index) => {
+        if (this.shouldSkip(node)) {
+            return { id: index, text: "" }; // Skip this node
+        }
+        return {
+          id: index,
+          text: this.getSafeText(node)
+        };
+      })
       .filter(item => item.text.trim().length > 0);
   }
 
@@ -74,15 +105,11 @@ export class DocxHandler {
     let currentChunkLen = 0;
     
     // Target ~3000 chars per chunk. 
-    // This allows sufficient context for the LLM while staying safe within output limits.
     const TARGET_CHUNK_SIZE = 3000; 
 
     for (const item of items) {
       const isHeader = this.isHeading(item.id);
       
-      // Break chunk if:
-      // 1. We have content AND
-      // 2. We hit a Heading (start of new section) OR we exceeded target size
       const shouldBreak = (currentChunk.length > 0) && (isHeader || currentChunkLen >= TARGET_CHUNK_SIZE);
 
       if (shouldBreak) {
@@ -95,7 +122,6 @@ export class DocxHandler {
       currentChunkLen += item.text.length;
     }
 
-    // Add remaining items
     if (currentChunk.length > 0) {
       chunks.push(currentChunk);
     }
@@ -111,7 +137,6 @@ export class DocxHandler {
 
     const itemsToTranslate = this.getExtractableParagraphs();
     
-    // Use smart chunking
     const chunks = this.createChunks(itemsToTranslate);
     const totalChunks = chunks.length;
     
@@ -127,7 +152,6 @@ export class DocxHandler {
         `Translating section ${processedChunks}/${totalChunks} (${percentage}%)...`
       );
       
-      // Retry logic for robustness
       let retries = 0;
       let batchSuccess = false;
       
@@ -136,12 +160,11 @@ export class DocxHandler {
           const results = await translateBatch(chunk);
           results.forEach((val, key) => translationMap.set(key, val));
           batchSuccess = true;
-          // Small delay to prevent rate limiting
           await delay(200); 
         } catch (e) {
           console.warn(`Section ${processedChunks} failed, retrying (${retries + 1}/3)...`, e);
           retries++;
-          await delay(1000 * retries); // Exponential backoff
+          await delay(1000 * retries); 
         }
       }
     }
@@ -149,35 +172,30 @@ export class DocxHandler {
     onProgress(totalChunks, totalChunks, "Reassembling document...");
     this.applyTranslations(translationMap);
 
-    // Serialize XML back to string
     const serializer = new XMLSerializer();
     const newXmlStr = serializer.serializeToString(this.xmlDoc);
 
-    // Update the zip
     this.zip.file("word/document.xml", newXmlStr);
 
-    // Generate blob
     return await this.zip.generateAsync({ type: "blob" });
   }
 
   private applyTranslations(translationMap: Map<number, string>) {
-    // Strategy: Replace text in the first run of the paragraph, clear others.
-    // This preserves paragraph-level structure (tables, lists, alignment) 
-    // but may lose run-level formatting (like bolding a single word in a sentence)
-    // which is acceptable for large-scale doc translation.
-
     translationMap.forEach((translatedText, index) => {
-      // If translation returned empty/null, keep original
       if (!translatedText) return;
 
       const pNode = this.paragraphNodes[index];
+      // Only select <w:t> nodes to replace.
+      // Important: We do NOT want to touch <w:fldChar> or <w:instrText> nodes, 
+      // as that would break fields like Captions (Figure 1) or Page Numbers.
       const textNodes = Array.from(pNode.getElementsByTagName("w:t"));
 
       if (textNodes.length > 0) {
-        // Set the first node to the full translation
+        // Set the first text node to the full translation
         textNodes[0].textContent = translatedText;
 
-        // Empty the rest to avoid duplication of old parts
+        // Empty the rest of the TEXT nodes to avoid duplication,
+        // but this keeps the field structure (fldChar/instrText) intact if they exist as siblings.
         for (let i = 1; i < textNodes.length; i++) {
             textNodes[i].textContent = "";
         }
