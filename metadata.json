@@ -1,0 +1,5 @@
+{
+  "name": "DocxTranslator AI",
+  "description": "A professional document translator that preserves formatting. It splits large .docx files by chapters/paragraphs and uses Gemini to translate Chinese to English while keeping images and layout intact.",
+  "requestFramePermissions": []
+}
