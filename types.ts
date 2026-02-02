@@ -1,3 +1,4 @@
+
 export interface TranslationChunk {
   id: number;
   originalText: string;
@@ -19,4 +20,13 @@ export enum AppState {
   REASSEMBLING,
   COMPLETED,
   ERROR
+}
+
+export type LLMProvider = 'gemini' | 'openai';
+
+export interface LLMConfig {
+  provider: LLMProvider;
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
 }

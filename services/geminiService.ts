@@ -1,17 +1,14 @@
-import { GoogleGenAI, Type, Schema } from "@google/genai";
 
-// Safely access API key even in environments where process might be undefined
-const getApiKey = () => {
+import { GoogleGenAI, Type, Schema } from "@google/genai";
+import { LLMConfig } from "../types";
+
+const getSystemApiKey = () => {
   if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
     return process.env.API_KEY;
   }
   return '';
 };
 
-// Initialize Gemini
-const getAIClient = () => new GoogleGenAI({ apiKey: getApiKey() });
-
-// Schema for batched translation to ensure structured JSON output
 const translationSchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -35,70 +32,112 @@ export interface TranslationItem {
   text: string;
 }
 
-export const translateBatch = async (items: TranslationItem[]): Promise<Map<number, string>> => {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    throw new Error("API Key is missing. Please check your environment configuration.");
+function extractJson(text: string): string {
+  const startIndex = text.indexOf('{');
+  const endIndex = text.lastIndexOf('}');
+  if (startIndex === -1 || endIndex === -1 || startIndex > endIndex) {
+    // Fallback for markdown blocks if indices are weird
+    return text.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
   }
-  
-  if (items.length === 0) return new Map();
+  return text.substring(startIndex, endIndex + 1);
+}
 
-  const ai = getAIClient();
+async function translateWithGemini(items: TranslationItem[], config: LLMConfig): Promise<Map<number, string>> {
+  const apiKey = config.apiKey || getSystemApiKey();
+  const ai = new GoogleGenAI({ apiKey });
   
-  // Construct a prompt that includes strict rules for mixed languages
-  const prompt = `
-    You are a professional translator processing a document.
+  const prompt = getPrompt(items);
+
+  const response = await ai.models.generateContent({
+    model: config.model || 'gemini-3-flash-preview',
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: translationSchema,
+      temperature: 0.1,
+    }
+  });
+
+  return parseResponse(response.text || "");
+}
+
+async function translateWithOpenAI(items: TranslationItem[], config: LLMConfig): Promise<Map<number, string>> {
+  const apiKey = config.apiKey || getSystemApiKey();
+  const baseUrl = config.baseUrl.replace(/\/$/, "");
+  
+  const prompt = getPrompt(items);
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: config.model,
+      messages: [
+        { role: "system", content: "You are a professional technical translator specializing in software manuals and engineering documents. You must respond ONLY with the requested JSON format." },
+        { role: "user", content: prompt }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.1
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(`API Error: ${response.status} ${JSON.stringify(errorData)}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices[0]?.message?.content;
+  return parseResponse(content || "");
+}
+
+function getPrompt(items: TranslationItem[]): string {
+  return `
+    Task: Translate the provided technical document segments from Chinese to English.
     
-    Task:
-    Translate the provided JSON array of text segments into English.
+    STRICT COMPLIANCE RULES:
+    1. NUMBERING & IDENTIFIERS: Keep all codes, numbering, and IDs exactly as they are. For example, if you see "2- 101", "3.1.2", or "[ID-404]", DO NOT change their formatting or spaces.
+    2. ABBREVIATIONS & GLOSSARY: If a segment looks like a Chinese definition in an abbreviation table (e.g., "异步采样率转换器"), DO NOT translate it to English. Return the original Chinese.
+    3. PRESERVE TAGS: If the text contains any special symbols like < > { } [ ], leave them untouched.
+    4. ENGLISH ALREADY: If a segment is already entirely in English, return it exactly as provided.
+    5. CONTEXT: This is a professional technical manual. Use formal engineering English.
+
+    Return a JSON object with a "translations" key containing an array of objects. Each object must have "id" (integer) and "translated_text" (string).
     
-    CRITICAL RULES:
-    1. **Chinese Text**: Translate to professional, clear English.
-    2. **English Text**: If a segment is ALREADY in English, return it EXACTLY as is. Do NOT translate English to Chinese or rephrase it.
-    3. **Mixed Text**: If a segment contains both (e.g., "Hello (你好)"), translate the Chinese part so the whole segment reads naturally in English (e.g., "Hello (Hello)").
-    4. **Formatting**: Preserve all numbers, bullet points (•, -, 1.), and special symbols.
-    5. **Context**: These segments are part of a larger document. Maintain consistent terminology.
-    
-    Input JSON:
+    Data to translate:
     ${JSON.stringify(items)}
   `;
+}
 
+function parseResponse(responseText: string): Map<number, string> {
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: translationSchema,
-        temperature: 0.3,
-      }
-    });
-
-    let responseText = response.text;
-    if (!responseText) {
-        throw new Error("Empty response from AI");
-    }
-
-    // Clean up Markdown code blocks if present (e.g. ```json ... ```)
-    responseText = responseText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-
-    const parsed = JSON.parse(responseText);
+    const cleanJson = extractJson(responseText);
+    const parsed = JSON.parse(cleanJson);
     const resultMap = new Map<number, string>();
 
     if (parsed.translations && Array.isArray(parsed.translations)) {
-        parsed.translations.forEach((t: any) => {
-            // Only add if we have a valid string
-            if (t.translated_text !== undefined && t.translated_text !== null) {
-                resultMap.set(t.id, t.translated_text);
-            }
-        });
+      parsed.translations.forEach((t: any) => {
+        if (t.translated_text !== undefined) {
+          resultMap.set(Number(t.id), t.translated_text);
+        }
+      });
     }
-
     return resultMap;
+  } catch (e) {
+    console.error("JSON Parsing failed for text:", responseText);
+    throw new Error("The AI returned an invalid JSON response. Please try again.");
+  }
+}
 
-  } catch (error) {
-    console.error("Translation batch error:", error);
-    // On error, return empty map so the app can handle partial failure or retry logic could be added
-    return new Map();
+export const translateBatch = async (items: TranslationItem[], config: LLMConfig): Promise<Map<number, string>> => {
+  if (items.length === 0) return new Map();
+
+  if (config.provider === 'gemini') {
+    return translateWithGemini(items, config);
+  } else {
+    return translateWithOpenAI(items, config);
   }
 };
