@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { DocxHandler } from './services/docxHandler';
 import { AppState, LLMConfig } from './types';
 import { Button } from './components/Button';
@@ -12,13 +12,20 @@ const App: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [translatedBlob, setTranslatedBlob] = useState<Blob | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  
-  const [config, setConfig] = useState<LLMConfig>({
-    provider: 'gemini',
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'gemini-3-flash-preview',
-    apiKey: ''
+
+  const [config, setConfig] = useState<LLMConfig>(() => {
+    const saved = localStorage.getItem('docx-translator-config');
+    return saved ? JSON.parse(saved) : {
+      provider: 'gemini',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gemini-3-flash-preview',
+      apiKey: ''
+    };
   });
+
+  useEffect(() => {
+    localStorage.setItem('docx-translator-config', JSON.stringify(config));
+  }, [config]);
 
   const docxHandler = useRef<DocxHandler>(new DocxHandler());
 
@@ -42,12 +49,12 @@ const App: React.FC = () => {
       setAppState(AppState.PARSING);
       setProgress({ completed: 0, total: 0, status: 'Parsing DOCX structure...' });
       await docxHandler.current.load(file);
-      
+
       setAppState(AppState.TRANSLATING);
       const blob = await docxHandler.current.processAndTranslate(config, (completed, total, status) => {
         setProgress({ completed, total, status });
       });
-      
+
       setTranslatedBlob(blob);
       setAppState(AppState.COMPLETED);
     } catch (err: any) {
@@ -83,7 +90,7 @@ const App: React.FC = () => {
         <main className="bg-white shadow-xl shadow-slate-200/50 rounded-2xl border border-slate-200 overflow-hidden">
           {/* Settings Section */}
           <section className="border-b border-slate-100 bg-slate-50/50">
-            <button 
+            <button
               onClick={() => setShowSettings(!showSettings)}
               className="w-full flex items-center justify-between px-6 py-4 text-sm font-semibold text-slate-700 hover:bg-slate-100/50 transition-colors"
             >
@@ -93,18 +100,18 @@ const App: React.FC = () => {
               </div>
               {showSettings ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             </button>
-            
+
             {showSettings && (
               <div className="px-6 py-6 border-t border-slate-100 space-y-5 animate-in fade-in slide-in-from-top-2 duration-300">
                 <div className="flex p-1 bg-slate-100 rounded-lg">
-                  <button 
-                    onClick={() => setConfig({...config, provider: 'gemini', model: 'gemini-3-flash-preview'})}
+                  <button
+                    onClick={() => setConfig({ ...config, provider: 'gemini', model: 'gemini-3-flash-preview' })}
                     className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-md transition-all ${config.provider === 'gemini' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     Google Gemini
                   </button>
-                  <button 
-                    onClick={() => setConfig({...config, provider: 'openai', model: 'gpt-4o'})}
+                  <button
+                    onClick={() => setConfig({ ...config, provider: 'openai', model: 'gpt-4o' })}
                     className={`flex-1 py-1.5 px-3 text-xs font-bold rounded-md transition-all ${config.provider === 'openai' ? 'bg-white shadow text-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     OpenAI Compatible
@@ -114,10 +121,10 @@ const App: React.FC = () => {
                 {config.provider === 'openai' && (
                   <div className="space-y-1">
                     <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Endpoint URL</label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       value={config.baseUrl}
-                      onChange={(e) => setConfig({...config, baseUrl: e.target.value})}
+                      onChange={(e) => setConfig({ ...config, baseUrl: e.target.value })}
                       placeholder="https://api.openai.com/v1"
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-shadow"
                     />
@@ -127,20 +134,20 @@ const App: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Model Identifier</label>
-                    <input 
-                      type="text" 
+                    <input
+                      type="text"
                       value={config.model}
-                      onChange={(e) => setConfig({...config, model: e.target.value})}
+                      onChange={(e) => setConfig({ ...config, model: e.target.value })}
                       placeholder={config.provider === 'gemini' ? "gemini-3-flash-preview" : "gpt-4o"}
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-shadow"
                     />
                   </div>
                   <div className="space-y-1">
                     <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">API Key (Optional)</label>
-                    <input 
-                      type="password" 
+                    <input
+                      type="password"
                       value={config.apiKey}
-                      onChange={(e) => setConfig({...config, apiKey: e.target.value})}
+                      onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
                       placeholder="Use system default"
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none transition-shadow"
                     />
@@ -179,7 +186,7 @@ const App: React.FC = () => {
 
             {appState === AppState.ERROR && (
               <div className="p-4 bg-rose-50 rounded-xl border border-rose-100 flex items-start text-rose-800 text-sm">
-                <AlertCircle className="h-5 w-5 mr-3 mt-0.5 text-rose-500" /> 
+                <AlertCircle className="h-5 w-5 mr-3 mt-0.5 text-rose-500" />
                 <div>
                   <p className="font-bold">Translation Interrupted</p>
                   <p className="opacity-90">{errorMsg}</p>
@@ -193,38 +200,38 @@ const App: React.FC = () => {
                   Begin Translation Process
                 </Button>
               )}
-              
+
               {(appState === AppState.PARSING || appState === AppState.TRANSLATING) && (
-                 <div className="w-full space-y-4">
-                   <div className="flex justify-between items-end">
-                     <div className="space-y-1">
-                       <span className="block text-xs font-bold text-slate-400 uppercase tracking-widest">Processing</span>
-                       <span className="block text-sm font-bold text-slate-700">{progress.status}</span>
-                     </div>
-                     <span className="text-2xl font-black text-indigo-600">
-                       {progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0}%
-                     </span>
-                   </div>
-                   <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
-                     <div 
-                       className="bg-indigo-600 h-full rounded-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(79,70,229,0.3)]" 
-                       style={{ width: `${progress.total > 0 ? (progress.completed / progress.total) * 100 : 0}%` }}
-                     ></div>
-                   </div>
-                 </div>
+                <div className="w-full space-y-4">
+                  <div className="flex justify-between items-end">
+                    <div className="space-y-1">
+                      <span className="block text-xs font-bold text-slate-400 uppercase tracking-widest">Processing</span>
+                      <span className="block text-sm font-bold text-slate-700">{progress.status}</span>
+                    </div>
+                    <span className="text-2xl font-black text-indigo-600">
+                      {progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-indigo-600 h-full rounded-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(79,70,229,0.3)]"
+                      style={{ width: `${progress.total > 0 ? (progress.completed / progress.total) * 100 : 0}%` }}
+                    ></div>
+                  </div>
+                </div>
               )}
 
               {appState === AppState.COMPLETED && (
                 <div className="w-full space-y-4 animate-in zoom-in-95 duration-300">
                   <div className="flex items-center justify-center p-4 bg-emerald-50 rounded-xl text-emerald-700 font-bold border border-emerald-100">
-                     <CheckCircle className="h-6 w-6 mr-3 text-emerald-500" /> Translation Complete!
+                    <CheckCircle className="h-6 w-6 mr-3 text-emerald-500" /> Translation Complete!
                   </div>
                   <div className="flex gap-4">
                     <Button onClick={downloadFile} className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-200">
                       <Download className="h-5 w-5 mr-2" /> Download Translated DOCX
                     </Button>
-                    <Button 
-                      variant="outline" 
+                    <Button
+                      variant="outline"
                       className="py-4 px-6 border-slate-200 text-slate-600 hover:bg-slate-50"
                       onClick={() => { setFile(null); setAppState(AppState.IDLE); setTranslatedBlob(null); }}
                     >
